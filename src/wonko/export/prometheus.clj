@@ -6,10 +6,12 @@
             [wonko.config :as config]
             [wonko.export.prometheus.create :as create]
             [wonko.export.prometheus.register :as register]
-            [wonko.test-utils :as tu])
+            [wonko.test-utils :as tu]
+            [wonko.utils :as utils])
   (:import io.prometheus.client.exporter.common.TextFormat
            io.prometheus.client.hotspot.DefaultExports
            java.util.concurrent.locks.ReentrantLock
+           java.util.concurrent.ConcurrentHashMap
            java.io.StringWriter))
 
 (defonce
@@ -18,11 +20,9 @@
   created-metrics
   (atom {}))
 
-(defonce
-  ^{:doc "Used to regulate access to registry creation.
-          TODO: At some point we might need finer-grained locking,
-                but this seems adequate for now."}
-  lock (Object.))
+(defonce ^ConcurrentHashMap
+  ^{:doc "Used to regulate access to registry creation. One lock per service name."}
+  service->lock (ConcurrentHashMap.))
 
 (defn get-label-names [properties]
   (sort (keys properties)))
@@ -40,12 +40,16 @@
             created-metric)))))
 
 (defn get-or-create-registry [service]
-  (locking lock
-    (let [registry-path [service :registry]]
-      (or (get-in @created-metrics registry-path)
-          (let [created-registry (create/registry)]
-            (swap! created-metrics assoc-in registry-path created-registry)
-            created-registry)))))
+  (let [lock (utils/put-if-absent service->lock service (ReentrantLock.))]
+    (.lock lock)
+    (try
+      (let [registry-path [service :registry]]
+        (or (get-in @created-metrics registry-path)
+            (let [created-registry (create/registry)]
+              (swap! created-metrics assoc-in registry-path created-registry)
+              created-registry)))
+      (finally
+        (.unlock lock)))))
 
 (defn register-event [{:keys [service metric-value properties] :as event}]
   (try
