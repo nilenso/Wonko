@@ -39,6 +39,9 @@
 (defn summary [registry metric-name help label-names]
   (-> (Summary/build)
       (set-basics metric-name help label-names)
+      (.quantile 0.5 0.05)
+      (.quantile 0.9 0.01)
+      (.quantile 0.99 0.001)
       (.register registry)))
 
 (defn histogram [registry metric-name help label-names
